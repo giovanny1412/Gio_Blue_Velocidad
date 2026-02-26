@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Robot Blockly BLE Pro</title>
+    <script src="https://unpkg.com/blockly/blockly.min.js"></script>
+    <script src="https://unpkg.com/blockly/javascript_compressed.js"></script>
+    <style>
+        body { font-family: sans-serif; background: #1e1e1e; color: white; text-align: center; margin: 0; }
+        #blocklyDiv { height: 500px; width: 100%; border-bottom: 2px solid #444; }
+        .panel { padding: 20px; background: #252526; display: flex; justify-content: center; gap: 15px; }
+        button { padding: 12px 25px; border-radius: 8px; border: none; cursor: pointer; font-weight: bold; }
+        .btn-blue { background: #007acc; color: white; }
+        .btn-green { background: #28a745; color: white; }
+        #console { background: #000; color: #0f0; padding: 10px; height: 100px; overflow-y: auto; text-align: left; font-family: monospace; }
+    </style>
+</head>
+<body>
+
+    <div id="blocklyDiv"></div>
+
+    <div class="panel">
+        <button class="btn-blue" onclick="conectarBLE()">🔗 Conectar Bluetooth</button>
+        <button class="btn-green" onclick="ejecutarPrograma()">▶️ Ejecutar Programa</button>
+    </div>
+
+    <div id="console">>> Sistema listo...</div>
+
+    <xml id="toolbox" style="display: none">
+        <category name="Movimiento" colour="230">
+            <block type="mover_carro"></block>
+        </category>
+        <category name="Configuración" colour="160">
+            <block type="ajustar_velocidad"></block>
+        </category>
+        <category name="Control" colour="120">
+            <block type="esperar_segundos"></block>
+            <block type="controls_repeat_ext">
+                <value name="TIMES"><shadow type="math_number"><field name="NUM">3</field></shadow></value>
+            </block>
+        </category>
+    </xml>
+
+<script>
+// --- DEFINICIÓN DE BLOQUES ---
+Blockly.Blocks['mover_carro'] = {
+  init: function() {
+    this.appendDummyInput().appendField("Mover")
+        .appendField(new Blockly.FieldDropdown([
+            ["adelante", "FORWARD"], ["atrás", "BACKWARD"], 
+            ["derecha", "RIGHT"], ["izquierda", "LEFT"], ["detener", "STOP"]
+        ]), "DIR");
+    this.setPreviousStatement(true); this.setNextStatement(true);
+    this.setColour(230);
+  }
+};
+
+Blockly.Blocks['ajustar_velocidad'] = {
+  init: function() {
+    this.appendDummyInput().appendField("Velocidad al")
+        .appendField(new Blockly.FieldDropdown([
+            ["25%", "64"], ["50%", "128"], ["75%", "192"], ["100%", "255"]
+        ]), "VEL");
+    this.setPreviousStatement(true); this.setNextStatement(true);
+    this.setColour(160);
+  }
+};
+
+Blockly.Blocks['esperar_segundos'] = {
+  init: function() {
+    this.appendDummyInput().appendField("esperar")
+        .appendField(new Blockly.FieldNumber(1, 0.1), "SEG").appendField("seg");
+    this.setPreviousStatement(true); this.setNextStatement(true);
+    this.setColour(120);
+  }
+};
+
+// --- GENERADORES ---
+const generator = javascript.javascriptGenerator;
+
+generator.forBlock['mover_carro'] = function(block) {
+  return `await enviar("${block.getFieldValue('DIR')}");\n`;
+};
+
+generator.forBlock['ajustar_velocidad'] = function(block) {
+  return `await enviar("SPEED_${block.getFieldValue('VEL')}");\n`;
+};
+
+generator.forBlock['esperar_segundos'] = function(block) {
+  return `await esperar(${block.getFieldValue('SEG') * 1000});\n`;
+};
+
+// --- LÓGICA BLE ---
+let characteristicBase;
+let enviando = false;
+const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+const CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
+
+function log(msg) {
+    const c = document.getElementById('console');
+    c.innerHTML += "<br>> " + msg;
+    c.scrollTop = c.scrollHeight;
+}
+
+async function conectarBLE() {
+    try {
+        const device = await navigator.bluetooth.requestDevice({
+            filters: [{ name: 'Carro_Bloques_BLE' }],
+            optionalServices: [SERVICE_UUID]
+        });
+        const server = await device.gatt.connect();
+        const service = await server.getPrimaryService(SERVICE_UUID);
+        characteristicBase = await service.getCharacteristic(CHARACTERISTIC_UUID);
+        log("✅ Conectado con éxito.");
+    } catch (e) { log("❌ Error: " + e); }
+}
+
+const esperar = ms => new Promise(r => setTimeout(r, ms));
+
+async function enviar(msg) {
+    if (!characteristicBase) return log("⚠️ No conectado");
+    while (enviando) await esperar(50);
+    try {
+        enviando = true;
+        const encoder = new TextEncoder();
+        await characteristicBase.writeValueWithResponse(encoder.encode(msg));
+        log("Enviado: " + msg);
+        await esperar(150); // Pausa de seguridad
+    } catch (err) { log("❌ Error envío: " + err); }
+    finally { enviando = false; }
+}
+
+async function ejecutarPrograma() {
+    const code = generator.workspaceToCode(workspace);
+    if (!code) return log("⚠️ No hay bloques.");
+    try {
+        const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+        const fn = new AsyncFunction(code + ' await enviar("STOP"); log("🏁 Fin.");');
+        await fn();
+    } catch (e) { log("❌ Error: " + e); }
+}
+
+const workspace = Blockly.inject('blocklyDiv', {
+    toolbox: document.getElementById('toolbox'),
+    trashcan: true
+});
+</script>
+</body>
+</html>
